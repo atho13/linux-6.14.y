@@ -418,6 +418,12 @@ static void dw_hdmi_qp_set_audio_interface(struct dw_hdmi_qp *hdmi,
 	/* Enable audio FIFO auto clear when overflow */
 	dw_hdmi_qp_mod(hdmi, AUD_FIFO_INIT_ON_OVF_EN, AUD_FIFO_INIT_ON_OVF_MSK,
 		       AUDIO_INTERFACE_CONFIG0);
+
+	dev_dbg(hdmi->dev, "audio: %d ch, fmt %d, %s mode, bpcuv %s, iec0=0x%02x iec3=0x%02x\n",
+		hparms->channels, fmt->bit_fmt,
+		(conf0 & AUD_FORMAT_MSK) == AUD_HBR ? "HBR" : "ASP",
+		(conf0 & I2S_BPCUV_RCV_MSK) ? "stream" : "internal",
+		hparms->iec.status[0], hparms->iec.status[3]);
 }
 
 /*
@@ -488,11 +494,6 @@ static void dw_hdmi_qp_set_sample_rate(struct dw_hdmi_qp *hdmi, unsigned long lo
 static int dw_hdmi_qp_audio_enable(struct drm_bridge *bridge,
 				   struct drm_connector *connector)
 {
-	struct dw_hdmi_qp *hdmi = dw_hdmi_qp_from_bridge(bridge);
-
-	if (hdmi->tmds_char_rate)
-		dw_hdmi_qp_mod(hdmi, 0, AVP_DATAPATH_PACKET_AUDIO_SWDISABLE, GLOBAL_SWDISABLE);
-
 	return 0;
 }
 
@@ -519,6 +520,13 @@ static int dw_hdmi_qp_audio_prepare(struct drm_bridge *bridge,
 	dw_hdmi_qp_set_sample_rate(hdmi, hdmi->tmds_char_rate, hparms->sample_rate);
 	dw_hdmi_qp_set_channel_status(hdmi, hparms->iec.status, ref2stream);
 	drm_atomic_helper_connector_hdmi_update_audio_infoframe(connector, &hparms->cea);
+
+	/*
+	 * Enable the audio datapath only after the interface, sample rate,
+	 * channel status and infoframe are fully configured. This avoids
+	 * sending invalid audio packets during reconfiguration.
+	 */
+	dw_hdmi_qp_mod(hdmi, 0, AVP_DATAPATH_PACKET_AUDIO_SWDISABLE, GLOBAL_SWDISABLE);
 
 	return 0;
 }
@@ -872,10 +880,10 @@ static int dw_hdmi_qp_config_audio_infoframe(struct dw_hdmi_qp *hdmi,
 	regmap_bulk_write(hdmi->regm, PKT_AUDI_CONTENTS1, &buffer[3], 1);
 	regmap_bulk_write(hdmi->regm, PKT_AUDI_CONTENTS2, &buffer[7], 1);
 
-	/* Enable ACR, AUDI, AMD */
+	/* Enable ACR, AUDI */
 	dw_hdmi_qp_mod(hdmi,
-		       PKTSCHED_ACR_TX_EN | PKTSCHED_AUDI_TX_EN | PKTSCHED_AMD_TX_EN,
-		       PKTSCHED_ACR_TX_EN | PKTSCHED_AUDI_TX_EN | PKTSCHED_AMD_TX_EN,
+		       PKTSCHED_ACR_TX_EN | PKTSCHED_AUDI_TX_EN,
+		       PKTSCHED_ACR_TX_EN | PKTSCHED_AUDI_TX_EN,
 		       PKTSCHED_PKT_EN);
 
 	/* Enable AUDS */
