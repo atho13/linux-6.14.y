@@ -670,7 +670,7 @@ hdmi_compute_config(const struct drm_connector *connector,
 	unsigned int max_bpc = clamp_t(unsigned int,
 				       conn_state->max_bpc,
 				       8, connector->max_bpc);
-	enum drm_output_color_format fmt;
+	enum drm_output_color_format fmt = DRM_OUTPUT_COLOR_FORMAT_RGB444;
 	int ret;
 
 	if (conn_state->color_format != DRM_CONNECTOR_COLOR_FORMAT_AUTO) {
@@ -695,29 +695,42 @@ hdmi_compute_config(const struct drm_connector *connector,
 				conn_state->color_format);
 			return -EINVAL;
 		}
-
-		return hdmi_compute_format_bpc(connector, conn_state, mode, max_bpc, fmt);
 	}
 
+	ret = hdmi_compute_format_bpc(connector, conn_state, mode, max_bpc, fmt);
+	if (!ret)
+		return ret;
+
+	if (conn_state->color_format != DRM_CONNECTOR_COLOR_FORMAT_AUTO)
+		drm_dbg_kms(connector->dev,
+			    "Explicitly set color format '%s' doesn't work, trying fallback.\n",
+			    drm_hdmi_connector_get_output_format_name(fmt));
+
 	/*
-	 * For %DRM_CONNECTOR_COLOR_FORMAT_AUTO, try RGB first, and fall back
-	 * to the less bandwidth-intensive YCBCR420 if RGB fails.
+	 * Fall back to RGB if the preferred format didn't work, then try
+	 * YUV420 as a last resort for bandwidth-constrained modes.
 	 */
-	ret = hdmi_compute_format_bpc(connector, conn_state, mode, max_bpc,
-				      DRM_OUTPUT_COLOR_FORMAT_RGB444);
-	if (ret) {
-		if (connector->ycbcr_420_allowed) {
-			ret = hdmi_compute_format_bpc(connector, conn_state,
-						      mode, max_bpc,
-						      DRM_OUTPUT_COLOR_FORMAT_YCBCR420);
-			if (ret)
-				drm_dbg_kms(connector->dev,
-					    "YUV420 output format doesn't work.\n");
-		} else {
+	if (fmt != DRM_OUTPUT_COLOR_FORMAT_RGB444) {
+		ret = hdmi_compute_format_bpc(connector, conn_state, mode, max_bpc,
+					      DRM_OUTPUT_COLOR_FORMAT_RGB444);
+		if (!ret)
+			return ret;
+	}
+
+	if (fmt == DRM_OUTPUT_COLOR_FORMAT_YCBCR420)
+		return ret;
+
+	if (connector->ycbcr_420_allowed) {
+		ret = hdmi_compute_format_bpc(connector, conn_state,
+					      mode, max_bpc,
+					      DRM_OUTPUT_COLOR_FORMAT_YCBCR420);
+		if (ret)
 			drm_dbg_kms(connector->dev,
-				    "YUV420 output format not allowed for connector.\n");
-			ret = -EINVAL;
-		}
+				    "YUV420 output format doesn't work.\n");
+	} else {
+		drm_dbg_kms(connector->dev,
+			    "YUV420 output format not allowed for connector.\n");
+		ret = -EINVAL;
 	}
 
 	return ret;
