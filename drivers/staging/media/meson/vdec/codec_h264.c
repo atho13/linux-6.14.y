@@ -184,8 +184,12 @@ static int codec_h264_start(struct amvdec_session *sess)
 	/* Allocate some memory for the H.264 SEI dump */
 	h264->sei_vaddr = dma_alloc_coherent(core->dev, SIZE_SEI,
 					     &h264->sei_paddr, GFP_KERNEL);
-	if (!h264->sei_vaddr)
+	if (!h264->sei_vaddr) {
+		dma_free_coherent(core->dev, SIZE_WORKSPACE,
+				  h264->workspace_vaddr, h264->workspace_paddr);
+		h264->workspace_vaddr = NULL;
 		return -ENOMEM;
+	}
 
 	amvdec_write_dos_bits(core, POWER_CTL_VLD, BIT(9) | BIT(6));
 
