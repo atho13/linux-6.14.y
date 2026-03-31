@@ -62,6 +62,8 @@ struct amvdec_session;
  * @vdec_hevc_clk: VDEC_HEVC clock
  * @vdec_hevcf_clk: VDEC_HEVCF clock
  * @esparser_reset: RESET for the PARSER
+ * @esparser_wq: wait queue for ESPARSER completion
+ * @esparser_done: flag signaled by ESPARSER ISR on completion
  * @vdev_dec: video device for the decoder
  * @v4l2_dev: v4l2 device
  * @m2m_dev: v4l2 m2m device
@@ -86,6 +88,8 @@ struct amvdec_core {
 	struct clk *vdec_hevcf_clk;
 
 	struct reset_control *esparser_reset;
+	wait_queue_head_t esparser_wq;
+	int esparser_done;
 
 	struct video_device *vdev_dec;
 	struct v4l2_device v4l2_dev;
