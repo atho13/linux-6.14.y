@@ -305,6 +305,13 @@ static void codec_h264_resume(struct amvdec_session *sess)
 	mb_height = ALIGN(h264->mb_height, 4);
 	mb_total = mb_width * mb_height;
 
+	/* Free previous ref buffer if any (resolution change) */
+	if (h264->ref_vaddr) {
+		dma_free_coherent(core->dev, h264->ref_size,
+				  h264->ref_vaddr, h264->ref_paddr);
+		h264->ref_vaddr = NULL;
+	}
+
 	h264->ref_size = mb_total * MB_MV_SIZE * h264->max_refs;
 	h264->ref_vaddr = dma_alloc_coherent(core->dev, h264->ref_size,
 					     &h264->ref_paddr, GFP_KERNEL);
