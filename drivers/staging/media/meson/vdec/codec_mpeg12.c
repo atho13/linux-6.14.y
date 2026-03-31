@@ -84,8 +84,15 @@ static int codec_mpeg12_start(struct amvdec_session *sess)
 		goto free_mpeg12;
 	}
 
+	/*
+	 * Configure canvases with the initial resolution so the firmware
+	 * has valid output buffers from the start. Unlike H.264, the
+	 * MPEG1/2 firmware begins decoding immediately without pausing
+	 * for resolution detection. Canvases are reconfigured in
+	 * resume() if the actual stream resolution differs.
+	 */
 	ret = amvdec_set_canvases(sess, (u32[]){ AV_SCRATCH_0, 0 },
-					(u32[]){ 8, 0 });
+					(u32[]){ 6, 0 });
 	if (ret)
 		goto free_workspace;
 
@@ -104,7 +111,6 @@ static int codec_mpeg12_start(struct amvdec_session *sess)
 	amvdec_write_dos(core, MREG_FATAL_ERROR, 0);
 	amvdec_write_dos(core, MREG_WAIT_BUFFER, 0);
 
-	sess->keyframe_found = 1;
 	sess->priv = mpeg12;
 
 	return 0;
@@ -114,8 +120,22 @@ free_workspace:
 			  mpeg12->workspace_paddr);
 free_mpeg12:
 	kfree(mpeg12);
-
 	return ret;
+}
+
+static void codec_mpeg12_resume(struct amvdec_session *sess)
+{
+	struct amvdec_core *core = sess->core;
+
+	/*
+	 * Canvas entries are written to consecutive AV_SCRATCH registers
+	 * starting at AV_SCRATCH_0. Limit to 6 entries so we do not
+	 * overwrite AV_SCRATCH_6 (MREG_PIC_WIDTH) and AV_SCRATCH_7
+	 * (MREG_PIC_HEIGHT) which the firmware uses to report resolution.
+	 */
+	amvdec_set_canvases(sess, (u32[]){ AV_SCRATCH_0, 0 },
+				  (u32[]){ 6, 0 });
+	amvdec_write_dos(core, MREG_CMD, (sess->width << 16) | sess->height);
 }
 
 static int codec_mpeg12_stop(struct amvdec_session *sess)
@@ -154,6 +174,19 @@ static void codec_mpeg12_update_dar(struct amvdec_session *sess)
 	}
 }
 
+static void codec_mpeg12_src_change(struct amvdec_session *sess)
+{
+	struct amvdec_core *core = sess->core;
+	u32 width = amvdec_read_dos(core, MREG_PIC_WIDTH);
+	u32 height = amvdec_read_dos(core, MREG_PIC_HEIGHT);
+
+	if (!width || !height)
+		return;
+
+	codec_mpeg12_update_dar(sess);
+	amvdec_src_change(sess, width, height, 8);
+}
+
 static irqreturn_t codec_mpeg12_threaded_isr(struct amvdec_session *sess)
 {
 	struct amvdec_core *core = sess->core;
@@ -165,6 +198,8 @@ static irqreturn_t codec_mpeg12_threaded_isr(struct amvdec_session *sess)
 	u32 pic_type;
 	u32 type = 0;
 	u32 offset;
+	u32 width;
+	u32 height;
 
 	amvdec_write_dos(core, ASSIST_MBOX1_CLR_REG, 1);
 	reg = amvdec_read_dos(core, MREG_FATAL_ERROR);
@@ -186,6 +221,37 @@ static irqreturn_t codec_mpeg12_threaded_isr(struct amvdec_session *sess)
 	if ((reg & GENMASK(23, 17)) == GENMASK(23, 17))
 		goto end;
 
+	buffer_index = ((reg & 0xf) - 1) & 7;
+
+	/*
+	 * When the decoder has not yet started (STATUS_INIT), read the
+	 * firmware-reported resolution to trigger the initial source
+	 * change event.  We can only read MREG_PIC_WIDTH/HEIGHT here
+	 * because after resume, amvdec_set_canvases() writes canvas
+	 * entries into the same AV_SCRATCH register range, overwriting
+	 * those firmware registers.
+	 *
+	 * For broadcast streams the sequence header may not be in the
+	 * first packets, so width/height may be zero initially — just
+	 * recycle the buffer and let the firmware keep parsing.
+	 */
+	if (sess->status == STATUS_INIT) {
+		width = amvdec_read_dos(core, MREG_PIC_WIDTH);
+		height = amvdec_read_dos(core, MREG_PIC_HEIGHT);
+		if (width && height)
+			codec_mpeg12_src_change(sess);
+		goto recycle;
+	}
+
+	/*
+	 * Frames arriving before the capture queue is running (e.g.
+	 * between source change and userspace configuring capture)
+	 * cannot be delivered. Recycle the firmware buffer so the
+	 * decoder does not stall waiting for output buffers.
+	 */
+	if (sess->status != STATUS_RUNNING)
+		goto recycle;
+
 	pic_info = amvdec_read_dos(core, MREG_PIC_INFO);
 	is_progressive = pic_info & PICINFO_PROG;
 
@@ -203,10 +269,18 @@ static irqreturn_t codec_mpeg12_threaded_isr(struct amvdec_session *sess)
 		type = 3;
 
 	codec_mpeg12_update_dar(sess);
-	buffer_index = ((reg & 0xf) - 1) & 7;
 	offset = amvdec_read_dos(core, MREG_FRAME_OFFSET);
 	amvdec_dst_buf_done_idx(sess, buffer_index, offset, field, type);
+	goto end;
 
+recycle:
+	/*
+	 * Return this buffer to the firmware so it can keep decoding.
+	 * MREG_BUFFERIN accepts one index at a time; if it is busy the
+	 * firmware will reclaim the buffer via MREG_WAIT_BUFFER later.
+	 */
+	if (codec_mpeg12_can_recycle(core))
+		codec_mpeg12_recycle(core, buffer_index);
 end:
 	amvdec_write_dos(core, MREG_BUFFEROUT, 0);
 	return IRQ_HANDLED;
@@ -224,5 +298,6 @@ struct amvdec_codec_ops codec_mpeg12_ops = {
 	.threaded_isr = codec_mpeg12_threaded_isr,
 	.can_recycle = codec_mpeg12_can_recycle,
 	.recycle = codec_mpeg12_recycle,
+	.resume = codec_mpeg12_resume,
 	.eos_sequence = codec_mpeg12_eos_sequence,
 };
