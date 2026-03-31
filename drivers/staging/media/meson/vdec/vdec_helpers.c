@@ -370,19 +370,26 @@ void amvdec_dst_buf_done_offset(struct amvdec_session *sess,
 
 	/* Look for our vififo offset to get the corresponding timestamp. */
 	list_for_each_entry_safe(tmp, n, &sess->timestamps, list) {
-		if (tmp->offset > offset) {
-			/*
-			 * Delete any record that remained unused for 32 match
-			 * checks
-			 */
-			if (tmp->used_count++ >= 32) {
-				list_del(&tmp->list);
-				kfree(tmp);
-			}
+		s64 delta = (s64)offset - tmp->offset;
+
+		/*
+		 * Offsets reported by codecs usually differ slightly,
+		 * so we need some wiggle room.
+		 * 4KiB being the minimum packet size, there is no risk here.
+		 */
+		if (delta > (-1 * (s32)SZ_4K) && delta < SZ_4K) {
+			match = tmp;
 			break;
 		}
 
-		match = tmp;
+		/*
+		 * Delete any record that remained unused for 32 match
+		 * checks
+		 */
+		if (tmp->used_count++ >= 32) {
+			list_del(&tmp->list);
+			kfree(tmp);
+		}
 	}
 
 	if (!match) {
