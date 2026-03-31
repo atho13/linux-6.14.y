@@ -35,6 +35,10 @@
 
 #define PICINFO_PROG		0x00008000
 #define PICINFO_TOP_FIRST	0x00002000
+#define PICINFO_TYPE_MASK	GENMASK(2, 0)
+#define PICINFO_TYPE_I		1
+#define PICINFO_TYPE_P		2
+#define PICINFO_TYPE_B		3
 
 struct codec_mpeg12 {
 	/* Buffer for the MPEG1/2 Workspace */
@@ -158,6 +162,8 @@ static irqreturn_t codec_mpeg12_threaded_isr(struct amvdec_session *sess)
 	u32 is_progressive;
 	u32 buffer_index;
 	u32 field = V4L2_FIELD_NONE;
+	u32 pic_type;
+	u32 type = 0;
 	u32 offset;
 
 	amvdec_write_dos(core, ASSIST_MBOX1_CLR_REG, 1);
@@ -184,10 +190,18 @@ static irqreturn_t codec_mpeg12_threaded_isr(struct amvdec_session *sess)
 			V4L2_FIELD_INTERLACED_TB :
 			V4L2_FIELD_INTERLACED_BT;
 
+	pic_type = pic_info & PICINFO_TYPE_MASK;
+	if (pic_type == PICINFO_TYPE_I)
+		type = 1;
+	else if (pic_type == PICINFO_TYPE_P)
+		type = 2;
+	else if (pic_type == PICINFO_TYPE_B)
+		type = 3;
+
 	codec_mpeg12_update_dar(sess);
 	buffer_index = ((reg & 0xf) - 1) & 7;
 	offset = amvdec_read_dos(core, MREG_FRAME_OFFSET);
-	amvdec_dst_buf_done_idx(sess, buffer_index, offset, field, 0);
+	amvdec_dst_buf_done_idx(sess, buffer_index, offset, field, type);
 
 end:
 	amvdec_write_dos(core, MREG_BUFFEROUT, 0);
