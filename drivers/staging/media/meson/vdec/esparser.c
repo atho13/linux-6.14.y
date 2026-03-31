@@ -314,10 +314,18 @@ esparser_queue(struct amvdec_session *sess, struct vb2_v4l2_buffer *vbuf)
 			num_dst_bufs = codec_ops->num_pending_bufs(sess);
 
 		num_dst_bufs += v4l2_m2m_num_dst_bufs_ready(sess->m2m_ctx);
-		num_dst_bufs -= 3;
 
-		if (esparser_vififo_get_free_space(sess) < payload_size ||
-		    atomic_read(&sess->esparser_queued_bufs) >= num_dst_bufs)
+		if (esparser_vififo_get_free_space(sess) < payload_size)
+			return -EAGAIN;
+
+		/*
+		 * Reserve 3 capture buffers for firmware reference frames.
+		 * When fewer than 3 are available (e.g. before capture queue
+		 * is configured for initial header parsing), skip the
+		 * backpressure check to allow source data through.
+		 */
+		if (num_dst_bufs > 3 &&
+		    atomic_read(&sess->esparser_queued_bufs) >= num_dst_bufs - 3)
 			return -EAGAIN;
 	} else if (esparser_vififo_get_free_space(sess) < payload_size) {
 		return -EAGAIN;
