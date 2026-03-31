@@ -133,8 +133,11 @@ vdec_queue_recycle(struct amvdec_session *sess, struct vb2_buffer *vb)
 	struct amvdec_buffer *new_buf;
 
 	new_buf = kmalloc_obj(*new_buf);
-	if (!new_buf)
+	if (!new_buf) {
+		dev_warn(sess->core->dev,
+			 "Failed to allocate recycle buffer\n");
 		return;
+	}
 	new_buf->vb = vb;
 
 	mutex_lock(&sess->bufs_recycle_lock);
