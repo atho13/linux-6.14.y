@@ -174,6 +174,10 @@ static irqreturn_t codec_mpeg12_threaded_isr(struct amvdec_session *sess)
 		return IRQ_HANDLED;
 	}
 
+	/* Acknowledge any buffer-wait request from firmware */
+	if (amvdec_read_dos(core, MREG_WAIT_BUFFER))
+		amvdec_write_dos(core, MREG_WAIT_BUFFER, 0);
+
 	reg = amvdec_read_dos(core, MREG_BUFFEROUT);
 	if (!reg)
 		return IRQ_HANDLED;

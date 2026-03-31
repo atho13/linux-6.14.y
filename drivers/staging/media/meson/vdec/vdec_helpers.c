@@ -429,9 +429,18 @@ void amvdec_dst_buf_done_idx(struct amvdec_session *sess,
 					      sess->fw_idx_to_vb2_idx[buf_idx]);
 
 	if (!vbuf) {
-		dev_err(dev,
+		dev_dbg(dev,
 			"Buffer %u done but it doesn't exist in m2m_ctx\n",
 			buf_idx);
+		/*
+		 * The firmware completed a buffer that isn't in the m2m
+		 * ready queue — it was already delivered to userspace and
+		 * not yet re-queued. We must still decrement the esparser
+		 * counter and kick the esparser work queue, otherwise the
+		 * counter drifts and EOS detection breaks.
+		 */
+		atomic_dec(&sess->esparser_queued_bufs);
+		schedule_work(&sess->esparser_queue_work);
 		return;
 	}
 
