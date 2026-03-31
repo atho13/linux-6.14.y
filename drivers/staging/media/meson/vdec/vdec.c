@@ -613,6 +613,11 @@ static int vdec_s_fmt(struct file *file, void *fh, struct v4l2_format *f)
 	struct v4l2_pix_format_mplane orig_pixmp;
 	struct v4l2_format format;
 	u32 pixfmt_out = 0, pixfmt_cap = 0;
+	struct vb2_queue *vq;
+
+	vq = v4l2_m2m_get_vq(sess->m2m_ctx, f->type);
+	if (vb2_is_busy(vq))
+		return -EBUSY;
 
 	orig_pixmp = *pixmp;
 
