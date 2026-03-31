@@ -781,6 +781,37 @@ static int vdec_subscribe_event(struct v4l2_fh *fh,
 	}
 }
 
+static int vdec_g_selection(struct file *file, void *fh,
+			    struct v4l2_selection *s)
+{
+	struct amvdec_session *sess = file_to_amvdec_session(file);
+
+	if (s->type != V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
+		return -EINVAL;
+
+	switch (s->target) {
+	case V4L2_SEL_TGT_COMPOSE_DEFAULT:
+	case V4L2_SEL_TGT_COMPOSE:
+		/* Visible resolution */
+		s->r.left = 0;
+		s->r.top = 0;
+		s->r.width = sess->width;
+		s->r.height = sess->height;
+		break;
+	case V4L2_SEL_TGT_COMPOSE_BOUNDS:
+		/* Coded (aligned) resolution */
+		s->r.left = 0;
+		s->r.top = 0;
+		s->r.width = ALIGN(sess->width, 32);
+		s->r.height = ALIGN(sess->height, 32);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int vdec_g_pixelaspect(struct file *file, void *fh, int type,
 			      struct v4l2_fract *f)
 {
@@ -812,6 +843,7 @@ static const struct v4l2_ioctl_ops vdec_ioctl_ops = {
 	.vidioc_create_bufs = v4l2_m2m_ioctl_create_bufs,
 	.vidioc_streamon = v4l2_m2m_ioctl_streamon,
 	.vidioc_streamoff = v4l2_m2m_ioctl_streamoff,
+	.vidioc_g_selection = vdec_g_selection,
 	.vidioc_enum_framesizes = vdec_enum_framesizes,
 	.vidioc_subscribe_event = vdec_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
