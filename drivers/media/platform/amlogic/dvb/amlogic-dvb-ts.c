@@ -2,7 +2,7 @@
 /*
  * Amlogic DVB TS input and S2P initialization
  *
- * Copyright (C) 2025 Neil Armstrong <neil.armstrong@linaro.org>
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
  */
 
 #include <linux/pinctrl/consumer.h>

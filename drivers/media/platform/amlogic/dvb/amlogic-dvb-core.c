@@ -2,7 +2,7 @@
 /*
  * Amlogic DVB/TS hardware demultiplexer driver - Core
  *
- * Copyright (C) 2025 Neil Armstrong <neil.armstrong@linaro.org>
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
  */
 
 /*
@@ -1281,7 +1281,7 @@ static void __exit aml_dvb_exit(void)
 module_init(aml_dvb_init);
 module_exit(aml_dvb_exit);
 
-MODULE_AUTHOR("Neil Armstrong <neil.armstrong@linaro.org>");
+MODULE_AUTHOR("Kağan Kadioğlu <kagankadioglutk@hotmail.com>");
 MODULE_DESCRIPTION("Amlogic DVB/TS demultiplexer driver");
 MODULE_LICENSE("GPL v2");
 MODULE_VERSION(AML_DVB_VERSION);

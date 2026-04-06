@@ -1,4 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Amlogic DVB tracepoint definitions
+ *
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
+ */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM aml_dvb
 

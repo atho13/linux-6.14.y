@@ -1,4 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Amlogic DVB SoC capability definitions
+ *
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
+ */
 #ifndef __AML_DVB_SOC_H
 #define __AML_DVB_SOC_H
 

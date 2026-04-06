@@ -10,6 +10,8 @@
  *
  * Module loading order is independent: if platform loads first, the list is ready;
  * if avl6862 loads first, it returns -EPROBE_DEFER and the kernel retries.
+ *
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
  */
 
 #include <linux/module.h>

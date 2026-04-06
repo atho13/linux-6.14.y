@@ -2,6 +2,8 @@
 /*
  * Amlogic DVB descrambler (DVB-CSA/AES/DES) support
  * CA extension: CA_SET_DESCR_EX, CA_SC2_SET_DESCR_EX, CA_SET_PID
+ *
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
  */
 
 #include <linux/dvb/ca.h>

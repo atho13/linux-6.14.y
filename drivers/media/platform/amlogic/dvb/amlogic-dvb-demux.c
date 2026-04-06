@@ -7,6 +7,8 @@
  *     → SEC_BUFF_READY IRQ → process_section() → cb.sec()
  *   DVR path: DMX_TYPE_TS/DVR → TS_RECORDER_ENABLE → AFIFO → cb.ts()
  *   Both run concurrently on the same DMX.
+ *
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
  */
 #define CREATE_TRACE_POINTS
 #include "amlogic-dvb-trace.h"

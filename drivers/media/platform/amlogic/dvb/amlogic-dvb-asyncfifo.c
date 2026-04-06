@@ -2,7 +2,7 @@
 /*
  * Amlogic DVB Async FIFO (DVR) – workqueue‑based poll engine, lockless ring
  *
- * Copyright (C) 2025 Neil Armstrong <neil.armstrong@linaro.org>
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
  */
 
 #include <linux/interrupt.h>

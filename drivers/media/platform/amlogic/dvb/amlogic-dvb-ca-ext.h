@@ -7,6 +7,8 @@
  *   CA_SET_DESCR_EX   : CSA/AES/DES/SM4 key set
  *   CA_SC2_SET_DESCR_EX: SC2 (S905D3+) extended CA
  *   CA_SET_PID        : set CA PID
+ *
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
  */
 #ifndef __AML_DVB_CA_EXT_H__
 #define __AML_DVB_CA_EXT_H__

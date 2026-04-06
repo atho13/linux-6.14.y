@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Amlogic DVB Enhanced Statistics Module (u64_stats_t based)
+ *
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
  */
 
 #include <linux/u64_stats_sync.h>

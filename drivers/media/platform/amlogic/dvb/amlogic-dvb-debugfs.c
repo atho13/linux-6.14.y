@@ -2,7 +2,7 @@
 /*
  * Amlogic DVB debugfs interface
  *
- * Copyright (C) 2025 Neil Armstrong <neil.armstrong@linaro.org>
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
  */
 
 #ifdef CONFIG_DEBUG_FS

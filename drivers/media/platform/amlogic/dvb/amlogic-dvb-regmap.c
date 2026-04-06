@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Amlogic DVB regmap configuration
+ *
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
+ */
 #include <linux/regmap.h>
 #include "amlogic_dvb.h"
 #include "amlogic-dvb-regs.h"

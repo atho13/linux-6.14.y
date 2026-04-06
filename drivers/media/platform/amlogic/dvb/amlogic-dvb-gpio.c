@@ -34,7 +34,7 @@
  *    ts0: parallel (GPIOX_0..7 + CLK + SYNC)
  *    ts1: serial   (GPIOZ_2 data, GPIOZ_3 clk)
  *
- * Copyright (C) 2025 Neil Armstrong <neil.armstrong@linaro.org>
+ * Copyright (C) 2026 Kağan Kadioğlu <kagankadioglutk@hotmail.com>
  */
 
 #include <linux/gpio/consumer.h>
