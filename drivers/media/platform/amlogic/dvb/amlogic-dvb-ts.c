@@ -230,7 +230,7 @@ int aml_ts_hw_init(struct aml_dvb *dvb)
 	}
 
 	/* Configure the TS_TOP_CONFIG register */
-	/* vendor verified (CoreELEC devmem 0xFFD063C4 = 0x7700BB47):
+	/* vendor verified (devmem 0xFFD063C4 = 0x7700BB47):
      * bit[31:24]=0x77 framing enable bitleri, bit[15:8]=pkt_len-1, bit[7:0]=sync_byte
      */
 	u32 ts_top_val = (0x77u << 24) | ((dvb->ts_packet_len - 1) << 8) |

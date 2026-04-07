@@ -64,7 +64,7 @@
 #define   FEC_SEL_S_TS1           5   /* serial S2P1 */
 #define   FEC_SEL_S_TS0           6   /* serial S2P0 */
 /* bit31+30: Free-running clock gates — REQUIRED on SM1.
- * CoreELEC devmem verification: DEMUX_CONTROL=0xC3C00750 → bit31+30 SET.
+ * devmem verification: DEMUX_CONTROL=0xC3C00750 → bit31+30 SET.
  * Without these bits HW does not respond / register access fails. */
 #define   ENABLE_FREE_CLK_FEC_DATA_VALID  BIT(31)
 #define   ENABLE_FREE_CLK_STB_REG         BIT(30)
@@ -86,7 +86,7 @@
 #define   STB_DEMUX_ENABLE                BIT(4)
 #define   NOT_USE_OF_SOP_INPUT            BIT(1)
 #define   IGNORE_NON_SOP_FEC_ERROR        BIT(0)
-/* vendor devmem verified (CoreELEC, channel enabled/disabled difference):
+/* vendor devmem verified ( channel enabled/disabled difference):
  *   DEMUX_CONTROL disabled=0x009FF8EF, enabled=0xC3C00750
  *   Without Bit31+30+8+6+4 SET, the hardware does not work. */
 #define   DMX_RECORDER_EN          (BIT(9) | BIT(4))
@@ -408,7 +408,7 @@
 #define   TS_S2P_VALID_INVERT      BIT(5)
 #define   TS_S2P_ERROR_INVERT      BIT(6)
 #define   TS_S2P_CLK_DIV           GENMASK(15, 8)
-/* vendor verified default value (CoreELEC devmem 0xFFD06040 = 0x0000CCCC):
+/* vendor verified default value (devmem 0xFFD06040 = 0x0000CCCC):
  * CLK_DIV=0xCC, CLK_INVERT+DATA_INVERT, BIT0 clear (S2P bypass in parallel mode) */
 #define   TS_S2P_VENDOR_INIT       0x0000CCCC
 #define   TS_S2P_SERIAL_SEL        GENMASK(17, 16)
@@ -485,7 +485,7 @@
 /* =========================================================================
  * ASYNC FIFO REGISTER LAYOUT — HARDWARE VERIFIED
  *
- * Verification: vendor CoreELEC kernel, active DVR channel, devmem read
+ * Verification: vendor kernel, active DVR channel, devmem read
  * Date: 2026-03-03
  *
  * Physical blocks (S905X3 memory map XLS):
@@ -543,7 +543,7 @@
  * REG3:
  *   bit[15:0] IRQ_THRESH  (128-byte block count, IRQ period)
  *
- * devmem verification (CoreELEC, active channel):
+ * devmem verification ( active channel):
  *   REG1 = 0x80301000
  *     bit31(RO FLUSH_STATUS)=1, bit21(WRAP_EN)=1,
  *     bit20(FLUSH_EN)=1, FLUSH_CNT=0x1000

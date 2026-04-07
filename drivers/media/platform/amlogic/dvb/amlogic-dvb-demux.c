@@ -696,7 +696,7 @@ static void dmx_enable(struct aml_dmx *dmx)
 		 *   0=TS0p(parallel)  1=TS1p  4=STS2(serial) 5=STS1 6=STS0
 		 * For serial input (tsin_a_ao), STS0=6 must be used.
 		 * For parallel input, port index maps directly to FEC_SEL.
-		 * Source: vendor c_stb_regs_define.h + CoreELEC devmem verification.
+		 * Source: vendor c_stb_regs_define.h + devmem verification.
 		 */
 		if (p < AML_MAX_TS_INPUT && dvb->ts[p].is_serial) {
 			/* Serial: STS0=6, STS1=5, STS2=4 */

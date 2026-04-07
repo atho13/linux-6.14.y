@@ -297,7 +297,7 @@ int aml_asyncfifo_init(struct aml_dvb *dvb)
 		 * FIFO[0] → 0xFFD0A000 (primary channel, active)
 		 * FIFO[1] → 0xFFD09000 (secondary, idle)
 		 *
-		 * devmem verification: CoreELEC REG1=0x80301000
+		 * devmem verification: REG1=0x80301000
 		 *   bit31 = FLUSH_STATUS (RO, data is flowing)
 		 *   bit21 = WRAP_EN ✓  bit20 = FLUSH_EN ✓  FLUSH_CNT=0x1000
 		 */
