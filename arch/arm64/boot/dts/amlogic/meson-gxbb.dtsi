@@ -914,6 +914,12 @@
 	power-domains = <&pwrc PWRC_GXBB_VPU_ID>;
 };
 
+&di {
+	compatible = "amlogic,gxbb-di", "amlogic,gx-di";
+	power-domains = <&pwrc PWRC_GXBB_VPU_ID>;
+	status = "okay";
+};
+
 &vdec {
 	compatible = "amlogic,gxbb-vdec", "amlogic,gx-vdec";
 	clocks = <&clkc CLKID_DOS_PARSER>,
