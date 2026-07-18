@@ -10,6 +10,7 @@
 
 #include <linux/io.h>
 #include <linux/mutex.h>
+#include <linux/timer.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-fh.h>
@@ -60,6 +61,24 @@ enum {
 	MESON_DI_CANVAS_OUT_Y,	/* progressive output, luma */
 	MESON_DI_CANVAS_OUT_C,	/* progressive output, chroma */
 	MESON_DI_CANVAS_NUM,
+};
+
+/*
+ * Debug: bound how far the hardware is programmed, to bisect a SoC hang over
+ * a serial console. Each higher value enables one more group of register
+ * writes; the default (FULL) programs everything. The two writes into
+ * display-shared registers land on their own stages: VIU_MISC_CTRL0 at MUX
+ * and the VD1_IF0 video-plane MIF at POST_CFG.
+ */
+enum meson_di_stage {
+	MESON_DI_STAGE_NONE,		/* no hardware register writes at all */
+	MESON_DI_STAGE_INIT,		/* + clock-gate/arbiter/FIFO (hw_init) */
+	MESON_DI_STAGE_SETUP,		/* + size/blend/interrupt setup */
+	MESON_DI_STAGE_MUX,		/* + VIU_MISC_CTRL0 display mux */
+	MESON_DI_STAGE_PRE_CFG,		/* + pre-stage MIF config */
+	MESON_DI_STAGE_PRE,		/* + pre-stage trigger */
+	MESON_DI_STAGE_POST_CFG,	/* + post-stage MIF config (VD1_IF0) */
+	MESON_DI_STAGE_FULL,		/* + post-stage trigger (normal) */
 };
 
 /* State of the hardware pipeline for the currently running job. */
@@ -144,6 +163,7 @@ struct meson_di {
 	enum meson_di_phase phase;
 	struct vb2_v4l2_buffer *cur_src;
 	struct vb2_v4l2_buffer *cur_dst;
+	struct timer_list job_timer;
 
 	void *nr_buf;
 	dma_addr_t nr_dma;
@@ -183,5 +203,6 @@ void meson_di_hw_post(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *dst,
 		      bool bottom_field);
 bool meson_di_hw_pre_done(struct meson_di *di);
 bool meson_di_hw_post_done(struct meson_di *di);
+void meson_di_hw_dump(struct meson_di *di);
 
 #endif /* __MESON_DI_H */

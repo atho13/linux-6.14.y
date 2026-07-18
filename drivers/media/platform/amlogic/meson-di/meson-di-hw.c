@@ -18,6 +18,7 @@
 
 #include <linux/bitops.h>
 #include <linux/io.h>
+#include <linux/moduleparam.h>
 
 #include <linux/soc/amlogic/meson-canvas.h>
 
@@ -28,6 +29,47 @@
 
 #define DI_HOLD_LINE		10
 #define DI_FIFO_SIZE		0xc0
+
+/* Debug knobs for on-hardware bring-up (see enum meson_di_stage). */
+static unsigned int stage = MESON_DI_STAGE_FULL;
+module_param(stage, uint, 0644);
+MODULE_PARM_DESC(stage, "debug: bound hardware programming (0=setup .. 5=full)");
+
+static bool trace;
+module_param(trace, bool, 0644);
+MODULE_PARM_DESC(trace, "debug: log each hardware programming step");
+
+/*
+ * Debug: bound hw_init() to isolate which of its writes hangs (used when
+ * stage >= INIT). 1=DI_CLKG_CTRL, 2=+DI_ARB_CTRL, 3=+DI FIFO sizes,
+ * 4=+VD1_IF0 FIFO size (the display-shared one).
+ */
+static unsigned int init_step = 4;
+module_param(init_step, uint, 0644);
+MODULE_PARM_DESC(init_step, "debug: bound hw_init writes (1=clkg .. 4=all)");
+
+/*
+ * Debug: enable the DI input clock (vpu_clkb) before touching DI registers.
+ * On GX the vendor writes HHI_VPU_CLKB_CNTL directly; this clock is not
+ * modelled in the mainline GX clock controller, so without it the DI block
+ * is unclocked and the first register access stalls the VCBUS. This is a
+ * bring-up workaround to be replaced by a proper CCF clock.
+ */
+#define HHI_VPU_CLKB_CNTL_PHYS	0xc883c20c
+#define HHI_VPU_CLKB_CNTL_VAL	0x01000100
+
+static bool clkb = true;
+module_param(clkb, bool, 0644);
+MODULE_PARM_DESC(clkb, "debug: enable vpu_clkb via HHI before DI access");
+
+/* Traced jobs since the last (runtime-resume) init, to bound serial spam. */
+static unsigned int dbg_jobs;
+
+#define di_trace(di, fmt, ...)						\
+	do {								\
+		if (trace && dbg_jobs <= 2)				\
+			dev_info((di)->dev, "di: " fmt "\n", ##__VA_ARGS__); \
+	} while (0)
 
 static void meson_di_config_canvas(struct meson_di *di, unsigned int idx,
 				   dma_addr_t addr, u32 stride, u32 height)
@@ -45,17 +87,57 @@ void meson_di_hw_init(struct meson_di *di)
 	if (di->match_data && di->match_data->hw_version == 2)
 		clkg = DI_CLKG_CTRL_GXBB;
 
+	dbg_jobs = 0;
+	di_trace(di, "init: enter (stage=%u)", stage);
+
+	if (stage < MESON_DI_STAGE_INIT) {
+		di_trace(di, "init: skipped (no hw writes)");
+		return;
+	}
+
+	/* Enable the DI input clock before any DI register is touched. */
+	if (clkb) {
+		void __iomem *p = ioremap(HHI_VPU_CLKB_CNTL_PHYS, 4);
+
+		if (p) {
+			di_trace(di, "init: HHI_VPU_CLKB_CNTL <= 0x%08x",
+				 HHI_VPU_CLKB_CNTL_VAL);
+			writel(HHI_VPU_CLKB_CNTL_VAL, p);
+			iounmap(p);
+		}
+	}
+
 	/* Ungate the DI clocks. */
+	di_trace(di, "init: DI_CLKG_CTRL=0x%08x", clkg);
 	di_write(di, DI_CLKG_CTRL, clkg);
+	if (init_step < 2) {
+		di_trace(di, "init: stop after clkg (init_step=%u)", init_step);
+		return;
+	}
 
-	/* Enable all DI arbiter ports. */
+	/* Enable all DI arbiter ports (read-modify-write). */
+	di_trace(di, "init: DI_ARB_CTRL");
 	di_update_bits(di, DI_ARB_CTRL, 0xf0f << 16, 0xf0f << 16);
+	if (init_step < 3) {
+		di_trace(di, "init: stop after arb (init_step=%u)", init_step);
+		return;
+	}
 
-	/* Program the read-MIF FIFO sizes. */
+	/* Program the DI read-MIF FIFO sizes. */
+	di_trace(di, "init: DI FIFO sizes");
 	di_write(di, DI_INP_LUMA_FIFO_SIZE, DI_FIFO_SIZE);
 	di_write(di, DI_MEM_LUMA_FIFO_SIZE, DI_FIFO_SIZE);
 	di_write(di, DI_IF1_LUMA_FIFO_SIZE, DI_FIFO_SIZE);
+	if (init_step < 4) {
+		di_trace(di, "init: stop after DI FIFOs (init_step=%u)", init_step);
+		return;
+	}
+
+	/* VD1_IF0 is the display-shared video-plane MIF. */
+	di_trace(di, "init: VD1_IF0 FIFO size");
 	di_write(di, VD1_IF0_LUMA_FIFO_SIZE, DI_FIFO_SIZE);
+
+	di_trace(di, "init: done");
 }
 
 void meson_di_hw_disable(struct meson_di *di)
@@ -89,6 +171,11 @@ void meson_di_hw_setup(struct meson_di_ctx *ctx)
 	u32 field_height = height / 2;
 	u32 mask;
 
+	if (stage < MESON_DI_STAGE_SETUP) {
+		di_trace(di, "setup: skipped (stage=%u)", stage);
+		return;
+	}
+
 	/* Pre operates on a single field, post on the full progressive frame. */
 	di_write(di, DI_PRE_SIZE, (width - 1) | ((field_height - 1) << 16));
 	di_write(di, DI_POST_SIZE, (width - 1) | ((height - 1) << 16));
@@ -113,9 +200,18 @@ void meson_di_hw_setup(struct meson_di_ctx *ctx)
 		  << DI_INTR_MASK_SHIFT);
 	di_write(di, DI_INTR_CTRL, mask | GENMASK(15, 0));
 
+	di_trace(di, "setup: size/blend/intr %ux%u", width, height);
+
+	if (stage < MESON_DI_STAGE_MUX) {
+		di_trace(di, "setup: skip VIU_MISC_CTRL0 (stage=%u)", stage);
+		return;
+	}
+
 	/* Route the post blend result into the DI write-back path (not VPP). */
+	di_trace(di, "setup: VIU_MISC_CTRL0 mux");
 	di_update_bits(di, VIU_MISC_CTRL0, 0x7 << 16, 0x5 << 16);
 	di_update_bits(di, VIU_MISC_CTRL0, BIT(28), BIT(28));
+	di_trace(di, "setup: done");
 }
 
 /*
@@ -161,6 +257,15 @@ void meson_di_hw_pre(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *src)
 	u32 field_height = height / 2;
 	u32 stride = ctx->in.plane_fmt[0].bytesperline;
 	bool bottom_first = ctx->field == V4L2_FIELD_INTERLACED_BT;
+
+	dbg_jobs++;
+
+	if (stage < MESON_DI_STAGE_PRE_CFG) {
+		di_trace(di, "pre: skipped (stage=%u)", stage);
+		return;
+	}
+
+	di_trace(di, "pre: canvas + MIF config");
 
 	/* Source planes: full-frame canvases, field selection is done by the MIF. */
 	meson_di_config_canvas(di, MESON_DI_CANVAS_SRC_Y, src_y, stride,
@@ -217,14 +322,23 @@ void meson_di_hw_pre(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *src)
 		 DI_PRE_CTRL_HOLD_LINE(DI_HOLD_LINE) |
 		 (bottom_first ? DI_PRE_CTRL_FIELD_NUM : 0));
 
-	/* Enable the read MIFs. */
-	di_update_bits(di, DI_INP_GEN_REG, DI_MIF_GEN_REG_EN, DI_MIF_GEN_REG_EN);
-	di_update_bits(di, DI_MEM_GEN_REG, DI_MIF_GEN_REG_EN, DI_MIF_GEN_REG_EN);
+	if (stage < MESON_DI_STAGE_PRE) {
+		di_trace(di, "pre: skip trigger (stage=%u)", stage);
+		return;
+	}
 
-	/* Kick the pre stage (frame + soft reset). */
+	/*
+	 * Kick the pre stage (frame + soft reset) first, then enable the read
+	 * MIFs to start the data flow, matching the vendor ordering.
+	 */
+	di_trace(di, "pre: trigger");
 	di_update_bits(di, DI_PRE_CTRL,
 		       DI_PRE_CTRL_FRAME_RST | DI_PRE_CTRL_SOFT_RST,
 		       DI_PRE_CTRL_FRAME_RST | DI_PRE_CTRL_SOFT_RST);
+
+	/* Enable the read MIFs. */
+	di_update_bits(di, DI_INP_GEN_REG, DI_MIF_GEN_REG_EN, DI_MIF_GEN_REG_EN);
+	di_update_bits(di, DI_MEM_GEN_REG, DI_MIF_GEN_REG_EN, DI_MIF_GEN_REG_EN);
 }
 
 void meson_di_hw_post(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *dst,
@@ -237,6 +351,13 @@ void meson_di_hw_post(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *dst,
 	u32 height = ctx->in.height;
 	u32 field_height = height / 2;
 	u32 stride = ctx->out.plane_fmt[0].bytesperline;
+
+	if (stage < MESON_DI_STAGE_POST_CFG) {
+		di_trace(di, "post: skipped (stage=%u)", stage);
+		return;
+	}
+
+	di_trace(di, "post: canvas + MIF config (incl VD1_IF0)");
 
 	/* Output planes. */
 	meson_di_config_canvas(di, MESON_DI_CANVAS_OUT_Y, dst_y, stride,
@@ -275,6 +396,11 @@ void meson_di_hw_post(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *dst,
 	di_write(di, DI_BLEND_CTRL, DI_BLEND_CTRL_EN | DI_BLEND_CTRL_FIX(7) |
 		 DI_BLEND_CTRL_MODE(1));
 
+	if (stage < MESON_DI_STAGE_FULL) {
+		di_trace(di, "post: skip trigger (stage=%u)", stage);
+		return;
+	}
+
 	/* Enable the read MIFs. */
 	di_update_bits(di, VD1_IF0_GEN_REG, DI_MIF_GEN_REG_EN,
 		       DI_MIF_GEN_REG_EN);
@@ -285,6 +411,7 @@ void meson_di_hw_post(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *dst,
 	 * Program and kick the post stage. Output goes to DDR (bit7), not VPP.
 	 * Bit29 selects the output field, bits[31:30] trigger the pass.
 	 */
+	di_trace(di, "post: trigger");
 	di_write(di, DI_POST_CTRL,
 		 DI_POST_CTRL_LBUF0_EN | DI_POST_CTRL_EI_EN |
 		 DI_POST_CTRL_MTN_LBUF_EN | DI_POST_CTRL_MTNP_RD_EN |
@@ -299,6 +426,8 @@ bool meson_di_hw_pre_done(struct meson_di *di)
 {
 	u32 val = di_read(di, DI_INTR_CTRL);
 	u32 pre = val & (DI_INTR_NRWR_DONE | DI_INTR_MTNWR_DONE);
+
+	di_trace(di, "de_irq: DI_INTR_CTRL=0x%08x", val);
 
 	if (!pre)
 		return false;
@@ -318,12 +447,16 @@ bool meson_di_hw_pre_done(struct meson_di *di)
 	di_update_bits(di, DI_INP_GEN_REG, DI_MIF_GEN_REG_EN, 0);
 	di_update_bits(di, DI_MEM_GEN_REG, DI_MIF_GEN_REG_EN, 0);
 
+	di_trace(di, "de_irq: pre done");
+
 	return true;
 }
 
 bool meson_di_hw_post_done(struct meson_di *di)
 {
 	u32 val = di_read(di, DI_INTR_CTRL);
+
+	di_trace(di, "post_irq: DI_INTR_CTRL=0x%08x", val);
 
 	if (!(val & DI_INTR_DIWR_DONE))
 		return false;
@@ -336,5 +469,21 @@ bool meson_di_hw_post_done(struct meson_di *di)
 	di_update_bits(di, VD1_IF0_GEN_REG, DI_MIF_GEN_REG_EN, 0);
 	di_update_bits(di, DI_IF1_GEN_REG, DI_MIF_GEN_REG_EN, 0);
 
+	di_trace(di, "post_irq: DIWR done");
+
 	return true;
+}
+
+/* Dump the key DI registers, for diagnosing a stalled job. */
+void meson_di_hw_dump(struct meson_di *di)
+{
+	dev_warn(di->dev,
+		 "di: PRE_CTRL=%08x POST_CTRL=%08x INTR_CTRL=%08x ARB=%08x CLKG=%08x\n",
+		 di_read(di, DI_PRE_CTRL), di_read(di, DI_POST_CTRL),
+		 di_read(di, DI_INTR_CTRL), di_read(di, DI_ARB_CTRL),
+		 di_read(di, DI_CLKG_CTRL));
+	dev_warn(di->dev,
+		 "di: INP_GEN=%08x MEM_GEN=%08x NRWR_CTRL=%08x MTNWR_CTRL=%08x\n",
+		 di_read(di, DI_INP_GEN_REG), di_read(di, DI_MEM_GEN_REG),
+		 di_read(di, DI_NRWR_CTRL), di_read(di, DI_MTNWR_CTRL));
 }

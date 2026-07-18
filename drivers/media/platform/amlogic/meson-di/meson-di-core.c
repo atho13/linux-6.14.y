@@ -43,6 +43,11 @@ static const struct meson_di_fmt meson_di_formats[] = {
 	{ .fourcc = V4L2_PIX_FMT_NV12, .depth = 12 },
 };
 
+/* Debug: log format negotiation (G_FMT/TRY_FMT) to diagnose filter probing. */
+static bool fmt_trace = true;
+module_param(fmt_trace, bool, 0644);
+MODULE_PARM_DESC(fmt_trace, "debug: log format negotiation");
+
 static inline struct meson_di_ctx *file_to_ctx(struct file *file)
 {
 	return container_of(file_to_v4l2_fh(file), struct meson_di_ctx, fh);
@@ -106,6 +111,35 @@ static void meson_di_fill_pix(struct v4l2_pix_format_mplane *pix,
  * mem2mem operations
  */
 
+/* Debug: abort a job whose completion interrupt never arrives. */
+#define MESON_DI_JOB_TIMEOUT_MS		200
+
+static void meson_di_job_timeout(struct timer_list *t)
+{
+	struct meson_di *di = timer_container_of(di, t, job_timer);
+	struct meson_di_ctx *ctx = di->curr;
+	struct vb2_v4l2_buffer *src;
+
+	if (!ctx)
+		return;
+
+	dev_warn(di->dev, "di: job timeout in phase %d\n", di->phase);
+	meson_di_hw_dump(di);
+	meson_di_hw_stop(di);
+
+	if (di->cur_dst)
+		v4l2_m2m_buf_done(di->cur_dst, VB2_BUF_STATE_ERROR);
+	src = v4l2_m2m_src_buf_remove(ctx->fh.m2m_ctx);
+	if (src)
+		v4l2_m2m_buf_done(src, VB2_BUF_STATE_ERROR);
+
+	di->cur_dst = NULL;
+	di->cur_src = NULL;
+	di->phase = MESON_DI_PHASE_IDLE;
+	di->curr = NULL;
+	v4l2_m2m_job_finish(di->m2m_dev, ctx->fh.m2m_ctx);
+}
+
 static void meson_di_device_run(void *priv)
 {
 	struct meson_di_ctx *ctx = priv;
@@ -138,6 +172,8 @@ static void meson_di_device_run(void *priv)
 	 * "de" interrupt, which then triggers the post (blend) stage.
 	 */
 	meson_di_hw_pre(ctx, src);
+	mod_timer(&di->job_timer,
+		  jiffies + msecs_to_jiffies(MESON_DI_JOB_TIMEOUT_MS));
 }
 
 static int meson_di_job_ready(void *priv)
@@ -173,6 +209,8 @@ static irqreturn_t meson_di_de_isr(int irq, void *priv)
 	if (!ctx || di->phase != MESON_DI_PHASE_PRE)
 		return IRQ_HANDLED;
 
+	timer_delete(&di->job_timer);
+
 	dst = v4l2_m2m_dst_buf_remove(ctx->fh.m2m_ctx);
 	if (!dst) {
 		struct vb2_v4l2_buffer *src;
@@ -192,6 +230,8 @@ static irqreturn_t meson_di_de_isr(int irq, void *priv)
 	di->cur_dst = dst;
 	di->phase = MESON_DI_PHASE_POST0;
 	meson_di_hw_post(ctx, dst, ctx->field == V4L2_FIELD_INTERLACED_BT);
+	mod_timer(&di->job_timer,
+		  jiffies + msecs_to_jiffies(MESON_DI_JOB_TIMEOUT_MS));
 
 	return IRQ_HANDLED;
 }
@@ -226,6 +266,8 @@ static irqreturn_t meson_di_post_isr(int irq, void *priv)
 	if (!ctx)
 		return IRQ_HANDLED;
 
+	timer_delete(&di->job_timer);
+
 	meson_di_finish_dst(di);
 
 	if (di->phase == MESON_DI_PHASE_POST0) {
@@ -235,6 +277,8 @@ static irqreturn_t meson_di_post_isr(int irq, void *priv)
 			di->phase = MESON_DI_PHASE_POST1;
 			meson_di_hw_post(ctx, dst,
 					 ctx->field != V4L2_FIELD_INTERLACED_BT);
+			mod_timer(&di->job_timer,
+				  jiffies + msecs_to_jiffies(MESON_DI_JOB_TIMEOUT_MS));
 			return IRQ_HANDLED;
 		}
 	}
@@ -344,6 +388,7 @@ static void meson_di_stop_streaming(struct vb2_queue *vq)
 	 * state after this returns.
 	 */
 	if (di->curr == ctx) {
+		timer_delete_sync(&di->job_timer);
 		meson_di_hw_stop(di);
 		synchronize_irq(di->irq_de);
 		synchronize_irq(di->irq_post);
@@ -445,6 +490,14 @@ static int meson_di_g_fmt(struct file *file, void *priv, struct v4l2_format *f)
 
 	f->fmt.pix_mp = *meson_di_get_pix(ctx, f->type);
 
+	if (fmt_trace)
+		dev_info(ctx->di->dev,
+			 "di: g_fmt type=%u ret=%p4cc %ux%u field=%u np=%u bpl=%u\n",
+			 f->type, &f->fmt.pix_mp.pixelformat,
+			 f->fmt.pix_mp.width, f->fmt.pix_mp.height,
+			 f->fmt.pix_mp.field, f->fmt.pix_mp.num_planes,
+			 f->fmt.pix_mp.plane_fmt[0].bytesperline);
+
 	return 0;
 }
 
@@ -453,6 +506,7 @@ static int meson_di_try_fmt(struct file *file, void *priv,
 {
 	struct meson_di_ctx *ctx = file_to_ctx(file);
 	struct v4l2_pix_format_mplane *pix = &f->fmt.pix_mp;
+	u32 req = pix->pixelformat;
 	const struct meson_di_fmt *fmt = meson_di_find_fmt(pix->pixelformat);
 
 	if (V4L2_TYPE_IS_OUTPUT(f->type)) {
@@ -469,6 +523,13 @@ static int meson_di_try_fmt(struct file *file, void *priv,
 	}
 
 	meson_di_fill_pix(pix, fmt);
+
+	if (fmt_trace)
+		dev_info(ctx->di->dev,
+			 "di: try_fmt type=%u req=%p4cc ret=%p4cc %ux%u field=%u np=%u bpl=%u\n",
+			 f->type, &req, &pix->pixelformat, pix->width,
+			 pix->height, pix->field, pix->num_planes,
+			 pix->plane_fmt[0].bytesperline);
 
 	return 0;
 }
@@ -714,6 +775,7 @@ static int meson_di_probe(struct platform_device *pdev)
 	di->dev = &pdev->dev;
 	di->match_data = of_device_get_match_data(&pdev->dev);
 	mutex_init(&di->mutex);
+	timer_setup(&di->job_timer, meson_di_job_timeout, 0);
 	platform_set_drvdata(pdev, di);
 
 	/*
@@ -832,6 +894,7 @@ static void meson_di_remove(struct platform_device *pdev)
 	unsigned int i;
 
 	video_unregister_device(di->vfd);
+	timer_delete_sync(&di->job_timer);
 	pm_runtime_disable(di->dev);
 	v4l2_m2m_release(di->m2m_dev);
 	v4l2_device_unregister(&di->v4l2_dev);
