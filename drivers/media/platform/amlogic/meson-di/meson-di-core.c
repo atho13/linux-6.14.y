@@ -504,6 +504,72 @@ static int meson_di_s_fmt(struct file *file, void *priv, struct v4l2_format *f)
 	return 0;
 }
 
+/*
+ * The deinterlacer neither crops nor scales, so selection always covers the
+ * whole frame. The handlers still need to exist: the ffmpeg filter issues
+ * VIDIOC_S_SELECTION during setup and treats a missing ioctl as an error.
+ */
+static int meson_di_g_selection(struct file *file, void *priv,
+				struct v4l2_selection *s)
+{
+	struct meson_di_ctx *ctx = file_to_ctx(file);
+	struct v4l2_pix_format_mplane *pix;
+
+	if (V4L2_TYPE_IS_OUTPUT(s->type)) {
+		switch (s->target) {
+		case V4L2_SEL_TGT_CROP:
+		case V4L2_SEL_TGT_CROP_DEFAULT:
+		case V4L2_SEL_TGT_CROP_BOUNDS:
+			break;
+		default:
+			return -EINVAL;
+		}
+		pix = &ctx->in;
+	} else {
+		switch (s->target) {
+		case V4L2_SEL_TGT_COMPOSE:
+		case V4L2_SEL_TGT_COMPOSE_DEFAULT:
+		case V4L2_SEL_TGT_COMPOSE_BOUNDS:
+			break;
+		default:
+			return -EINVAL;
+		}
+		pix = &ctx->out;
+	}
+
+	s->r.left = 0;
+	s->r.top = 0;
+	s->r.width = pix->width;
+	s->r.height = pix->height;
+
+	return 0;
+}
+
+static int meson_di_s_selection(struct file *file, void *priv,
+				struct v4l2_selection *s)
+{
+	struct meson_di_ctx *ctx = file_to_ctx(file);
+	struct v4l2_pix_format_mplane *pix;
+
+	if (V4L2_TYPE_IS_OUTPUT(s->type)) {
+		if (s->target != V4L2_SEL_TGT_CROP)
+			return -EINVAL;
+		pix = &ctx->in;
+	} else {
+		if (s->target != V4L2_SEL_TGT_COMPOSE)
+			return -EINVAL;
+		pix = &ctx->out;
+	}
+
+	/* Cropping and scaling are not supported: report the full frame. */
+	s->r.left = 0;
+	s->r.top = 0;
+	s->r.width = pix->width;
+	s->r.height = pix->height;
+
+	return 0;
+}
+
 static const struct v4l2_ioctl_ops meson_di_ioctl_ops = {
 	.vidioc_querycap = meson_di_querycap,
 
@@ -527,6 +593,9 @@ static const struct v4l2_ioctl_ops meson_di_ioctl_ops = {
 
 	.vidioc_streamon = v4l2_m2m_ioctl_streamon,
 	.vidioc_streamoff = v4l2_m2m_ioctl_streamoff,
+
+	.vidioc_g_selection = meson_di_g_selection,
+	.vidioc_s_selection = meson_di_s_selection,
 
 	.vidioc_subscribe_event = v4l2_ctrl_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
