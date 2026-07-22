@@ -23,6 +23,27 @@
 #define DI_INTR_CTRL			0x1730
 #define DI_MTN_1_CTRL1			0x1740
 
+/* Edge interpolation, motion and noise-reduction block init */
+#define DI_EI_CTRL0			0x1704
+#define DI_EI_CTRL1			0x1705
+#define DI_EI_CTRL2			0x1706
+#define DI_EI_CTRL3			0x1719
+#define DI_MTN_CTRL1			0x170c
+#define DI_PRE_HOLD			0x1733
+#define DI_MTN_1_CTRL4			0x1743
+#define DI_MTN_1_CTRL7			0x17aa
+#define NR2_SW_EN			0x174f
+#define NR2_FRM_SIZE			0x1750
+#define DNR_CTRL			0x2d00
+#define DNR_HVSIZE			0x2d01
+#define NR3_MODE			0x2ff0
+#define NR3_COOP_PARA			0x2ff1
+#define NR3_CNOOP_GAIN			0x2ff2
+#define NR3_YMOT_PARA			0x2ff3
+#define NR3_CMOT_PARA			0x2ff4
+#define NR3_SUREMOT_YGAIN		0x2ff5
+#define NR3_SUREMOT_CGAIN		0x2ff6
+
 /* Blend window */
 #define DI_BLEND_REG0_X			0x1710
 #define DI_BLEND_REG0_Y			0x1711
@@ -71,7 +92,13 @@
 #define DI_MEM_LUMA_Y0			0x17de
 #define DI_MEM_CHROMA_X0		0x17df
 #define DI_MEM_CHROMA_Y0		0x17e0
+#define DI_MEM_GEN_REG2			0x1792
+#define DI_MEM_RPT_LOOP			0x17e1
+#define DI_MEM_LUMA0_RPT_PAT		0x17e2
+#define DI_MEM_CHROMA0_RPT_PAT		0x17e3
+#define DI_MEM_DUMMY_PIXEL		0x17e4
 #define DI_MEM_LUMA_FIFO_SIZE		0x17e5
+#define DI_MEM_FMT_CTRL			0x17e6
 #define DI_MEM_FMT_W			0x17e7
 
 /* IF1 (post opposite field) read MIF */
@@ -119,6 +146,8 @@
 /* DI_PRE_CTRL bits */
 #define DI_PRE_CTRL_NR_EN		BIT(0)
 #define DI_PRE_CTRL_MTN_EN		BIT(1)
+#define DI_PRE_CTRL_CHECK_AFTER_NR	BIT(4)
+#define DI_PRE_CTRL_CHAN2_HIST_EN	BIT(6)
 #define DI_PRE_CTRL_MTN_AFTER_NR	BIT(22)
 #define DI_PRE_CTRL_HOLD_LINE(x)	((x) << 16)
 #define DI_PRE_CTRL_FIELD_NUM		BIT(29)

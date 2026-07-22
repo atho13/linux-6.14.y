@@ -74,10 +74,19 @@ static unsigned int dbg_jobs;
 static void meson_di_config_canvas(struct meson_di *di, unsigned int idx,
 				   dma_addr_t addr, u32 stride, u32 height)
 {
-	meson_canvas_config(di->canvas, di->canvas_idx[idx], addr, stride,
-			    height, MESON_CANVAS_WRAP_NONE,
-			    MESON_CANVAS_BLKMODE_LINEAR,
-			    MESON_CANVAS_ENDIAN_SWAP64);
+	int ret = meson_canvas_config(di->canvas, di->canvas_idx[idx], addr,
+				      stride, height, MESON_CANVAS_WRAP_NONE,
+				      MESON_CANVAS_BLKMODE_LINEAR,
+				      MESON_CANVAS_ENDIAN_SWAP64);
+
+	if (ret)
+		dev_warn(di->dev,
+			 "di: canvas[%u] idx=%u cfg failed %d (addr=%pad stride=%u h=%u)\n",
+			 idx, di->canvas_idx[idx], ret, &addr, stride, height);
+	else if (trace && dbg_jobs <= 2)
+		dev_info(di->dev,
+			 "di: canvas[%u] idx=%u addr=%pad stride=%u h=%u\n",
+			 idx, di->canvas_idx[idx], &addr, stride, height);
 }
 
 void meson_di_hw_init(struct meson_di *di)
@@ -115,9 +124,9 @@ void meson_di_hw_init(struct meson_di *di)
 		return;
 	}
 
-	/* Enable all DI arbiter ports (read-modify-write). */
+	/* Enable DI MIF bus arbitration (bits[15:0]). */
 	di_trace(di, "init: DI_ARB_CTRL");
-	di_update_bits(di, DI_ARB_CTRL, 0xf0f << 16, 0xf0f << 16);
+	di_update_bits(di, DI_ARB_CTRL, 0xffff, 0xf0f);
 	if (init_step < 3) {
 		di_trace(di, "init: stop after arb (init_step=%u)", init_step);
 		return;
@@ -136,6 +145,36 @@ void meson_di_hw_init(struct meson_di *di)
 	/* VD1_IF0 is the display-shared video-plane MIF. */
 	di_trace(di, "init: VD1_IF0 FIFO size");
 	di_write(di, VD1_IF0_LUMA_FIFO_SIZE, DI_FIFO_SIZE);
+
+	/* Pre-stage FIFO hold configuration. */
+	di_write(di, DI_PRE_HOLD, BIT(31) | (31 << 16) | 31);
+
+	/* Edge-interpolation block. */
+	di_write(di, DI_EI_CTRL0, 0x00ff0100);
+	di_write(di, DI_EI_CTRL1, 0x5a0a0f2d);
+	di_write(di, DI_EI_CTRL2, 0x050a0a5d);
+	di_write(di, DI_EI_CTRL3, 0x80000013);
+
+	/* Motion-adaptive block. */
+	di_write(di, DI_MTN_1_CTRL4, 0x01800880);
+	di_write(di, DI_MTN_1_CTRL7, 0x0a800480);
+	di_write(di, DI_MTN_1_CTRL1, 0xa0202015);
+	di_write(di, DI_MTN_CTRL1, 0x00020002);
+
+	/*
+	 * Noise-reduction block. NR3 temporal is left disabled (mode 0): with
+	 * no genuine previous-frame reference it would stall the pipeline; the
+	 * NR-only path uses NR2 spatial. DNR + NR2 defaults suffice.
+	 */
+	di_trace(di, "init: NR/EI/MA blocks");
+	di_write(di, DNR_CTRL, 0x0001df00);
+	di_write(di, NR3_MODE, 0x00000000);
+	di_write(di, NR3_COOP_PARA, 0x0028ff00);
+	di_write(di, NR3_CNOOP_GAIN, 0x00881900);
+	di_write(di, NR3_YMOT_PARA, 0x000c0a1e);
+	di_write(di, NR3_CMOT_PARA, 0x0008140f);
+	di_write(di, NR3_SUREMOT_YGAIN, 0x100c4014);
+	di_write(di, NR3_SUREMOT_CGAIN, 0x22264014);
 
 	di_trace(di, "init: done");
 }
@@ -180,6 +219,12 @@ void meson_di_hw_setup(struct meson_di_ctx *ctx)
 	di_write(di, DI_PRE_SIZE, (width - 1) | ((field_height - 1) << 16));
 	di_write(di, DI_POST_SIZE, (width - 1) | ((height - 1) << 16));
 
+	/* Per-field noise-reduction sizing and enable. */
+	di_write(di, NR2_FRM_SIZE, (field_height << 16) | width);
+	di_update_bits(di, NR2_SW_EN, BIT(4), BIT(4));
+	di_write(di, DNR_HVSIZE, (width << 16) | field_height);
+	di_write(di, DNR_CTRL, 0x0001df00);
+
 	/* Blend window covers the whole frame. */
 	di_write(di, DI_BLEND_REG0_X, (width - 1));
 	di_write(di, DI_BLEND_REG0_Y, (height - 1));
@@ -214,6 +259,88 @@ void meson_di_hw_setup(struct meson_di_ctx *ctx)
 	di_trace(di, "setup: done");
 }
 
+/* Register set of a pre-stage read MIF (input / memory). */
+struct meson_di_mif_regs {
+	u16 gen_reg;
+	u16 gen_reg2;
+	u16 canvas0;
+	u16 luma_x0;
+	u16 luma_y0;
+	u16 chroma_x0;
+	u16 chroma_y0;
+	u16 rpt_loop;
+	u16 luma_rpt_pat;
+	u16 chroma_rpt_pat;
+	u16 dummy_pixel;
+	u16 fmt_ctrl;
+	u16 fmt_w;
+};
+
+static const struct meson_di_mif_regs di_inp_mif = {
+	.gen_reg = DI_INP_GEN_REG, .gen_reg2 = DI_INP_GEN_REG2,
+	.canvas0 = DI_INP_CANVAS0,
+	.luma_x0 = DI_INP_LUMA_X0, .luma_y0 = DI_INP_LUMA_Y0,
+	.chroma_x0 = DI_INP_CHROMA_X0, .chroma_y0 = DI_INP_CHROMA_Y0,
+	.rpt_loop = DI_INP_RPT_LOOP,
+	.luma_rpt_pat = DI_INP_LUMA0_RPT_PAT,
+	.chroma_rpt_pat = DI_INP_CHROMA0_RPT_PAT,
+	.dummy_pixel = DI_INP_DUMMY_PIXEL,
+	.fmt_ctrl = DI_INP_FMT_CTRL, .fmt_w = DI_INP_FMT_W,
+};
+
+static const struct meson_di_mif_regs di_mem_mif = {
+	.gen_reg = DI_MEM_GEN_REG, .gen_reg2 = DI_MEM_GEN_REG2,
+	.canvas0 = DI_MEM_CANVAS0,
+	.luma_x0 = DI_MEM_LUMA_X0, .luma_y0 = DI_MEM_LUMA_Y0,
+	.chroma_x0 = DI_MEM_CHROMA_X0, .chroma_y0 = DI_MEM_CHROMA_Y0,
+	.rpt_loop = DI_MEM_RPT_LOOP,
+	.luma_rpt_pat = DI_MEM_LUMA0_RPT_PAT,
+	.chroma_rpt_pat = DI_MEM_CHROMA0_RPT_PAT,
+	.dummy_pixel = DI_MEM_DUMMY_PIXEL,
+	.fmt_ctrl = DI_MEM_FMT_CTRL, .fmt_w = DI_MEM_FMT_W,
+};
+
+/*
+ * Program a pre-stage read MIF for one interlaced field of a 2-plane NV12
+ * buffer. @phase selects the top (0) or bottom (1) field. The cntl_enable
+ * bit (bit0 of the GEN_REG) is left clear and set when the pipeline is kicked.
+ */
+static void meson_di_set_pre_mif(struct meson_di *di,
+				 const struct meson_di_mif_regs *r,
+				 u8 canvas_y, u8 canvas_c, u32 width,
+				 u32 field_height, u8 phase)
+{
+	u32 vt_ini_phase = phase ? 0xa : 0xe;
+
+	/*
+	 * reset_on_gofield, no-dummy, hold-line, push-dummy, y/cb/cr bursts of
+	 * 3/1/1, chroma repeat-last-line, and separate_en (2-plane NV12).
+	 */
+	di_write(di, r->gen_reg,
+		 BIT(29) | BIT(25) | (DI_HOLD_LINE << 19) | BIT(18) |
+		 BIT(12) | BIT(10) | (3 << 8) | BIT(6) | BIT(1));
+	/* GEN_REG2 bit0 selects NV21; keep 0 for NV12. */
+	di_write(di, r->gen_reg2, 0);
+
+	di_write(di, r->canvas0, canvas_y | (canvas_c << 8));
+	di_write(di, r->luma_x0, (width - 1) << 16);
+	di_write(di, r->luma_y0, (field_height - 1) << 16);
+	di_write(di, r->chroma_x0, (width / 2 - 1) << 16);
+	di_write(di, r->chroma_y0, (field_height / 2 - 1) << 16);
+
+	/* Repeat first/last line so a single field reads correctly. */
+	di_write(di, r->rpt_loop, 0x1010);
+	di_write(di, r->luma_rpt_pat, 0x80);
+	di_write(di, r->chroma_rpt_pat, 0x80);
+	di_write(di, r->dummy_pixel, 0x00808000);
+
+	/* 4:2:0 vertical/horizontal chroma format converter. */
+	di_write(di, r->fmt_ctrl,
+		 (1 << 21) | BIT(20) | BIT(16) | (vt_ini_phase << 8) |
+		 (8 << 1) | 1);
+	di_write(di, r->fmt_w, (width << 16) | (width / 2));
+}
+
 /*
  * Program a read MIF that consumes one interlaced field of an NV12 buffer.
  * @phase selects the top (0) or bottom (1) field lines.
@@ -244,7 +371,8 @@ static void meson_di_set_wr_mif(struct meson_di *di, u16 x, u16 y, u16 ctrl,
 {
 	di_write(di, x, width - 1);
 	di_write(di, y, (3u << 30) | BIT(15) | (height - 1));
-	di_write(di, ctrl, canvas_y | (canvas_c << 8) | (2 << 26));
+	di_write(di, ctrl, canvas_y | (canvas_c << 8) |
+		 BIT(24) | (2 << 26) | BIT(30));
 }
 
 void meson_di_hw_pre(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *src)
@@ -257,6 +385,7 @@ void meson_di_hw_pre(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *src)
 	u32 field_height = height / 2;
 	u32 stride = ctx->in.plane_fmt[0].bytesperline;
 	bool bottom_first = ctx->field == V4L2_FIELD_INTERLACED_BT;
+	u32 pre_ctrl;
 
 	dbg_jobs++;
 
@@ -283,22 +412,16 @@ void meson_di_hw_pre(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *src)
 			       field_height);
 
 	/* Current field read MIF. */
-	meson_di_set_read_mif(di, DI_INP_GEN_REG, DI_INP_CANVAS0,
-			      DI_INP_LUMA_X0, DI_INP_LUMA_Y0,
-			      DI_INP_CHROMA_X0, DI_INP_CHROMA_Y0,
-			      di->canvas_idx[MESON_DI_CANVAS_SRC_Y],
-			      di->canvas_idx[MESON_DI_CANVAS_SRC_C],
-			      width, field_height, 0);
-	/* NV12 semi-planar select. */
-	di_write(di, DI_INP_GEN_REG2, 1);
+	meson_di_set_pre_mif(di, &di_inp_mif,
+			     di->canvas_idx[MESON_DI_CANVAS_SRC_Y],
+			     di->canvas_idx[MESON_DI_CANVAS_SRC_C],
+			     width, field_height, 0);
 
 	/* Opposite field read MIF (memory). */
-	meson_di_set_read_mif(di, DI_MEM_GEN_REG, DI_MEM_CANVAS0,
-			      DI_MEM_LUMA_X0, DI_MEM_LUMA_Y0,
-			      DI_MEM_CHROMA_X0, DI_MEM_CHROMA_Y0,
-			      di->canvas_idx[MESON_DI_CANVAS_SRC_Y],
-			      di->canvas_idx[MESON_DI_CANVAS_SRC_C],
-			      width, field_height, 1);
+	meson_di_set_pre_mif(di, &di_mem_mif,
+			     di->canvas_idx[MESON_DI_CANVAS_SRC_Y],
+			     di->canvas_idx[MESON_DI_CANVAS_SRC_C],
+			     width, field_height, 1);
 
 	/* NR and motion write-back MIFs. */
 	meson_di_set_wr_mif(di, DI_NRWR_X, DI_NRWR_Y, DI_NRWR_CTRL,
@@ -309,18 +432,16 @@ void meson_di_hw_pre(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *src)
 	di_write(di, DI_MTNWR_Y, (field_height - 1) << 16);
 	di_write(di, DI_MTNWR_CTRL, di->canvas_idx[MESON_DI_CANVAS_MTN]);
 
-	/* Motion detection uses madi mode 5. */
-	di_update_bits(di, DI_MTN_1_CTRL1, 0x7 << 29, 0x5 << 29);
-
 	/*
-	 * Run noise reduction (default pass-through coefficients) and motion
-	 * detection. Bit29 selects which field is read first.
+	 * Noise-reduction pass only (no motion/chan2/contour yet); it produces
+	 * the NRWR write-back whose completion advances the job. Bit29 selects
+	 * which field is read first.
 	 */
-	di_write(di, DI_PRE_CTRL,
-		 DI_PRE_CTRL_NR_EN | DI_PRE_CTRL_MTN_EN |
-		 DI_PRE_CTRL_MTN_AFTER_NR |
-		 DI_PRE_CTRL_HOLD_LINE(DI_HOLD_LINE) |
-		 (bottom_first ? DI_PRE_CTRL_FIELD_NUM : 0));
+	pre_ctrl = DI_PRE_CTRL_NR_EN | DI_PRE_CTRL_CHECK_AFTER_NR |
+		   DI_PRE_CTRL_CHAN2_HIST_EN | DI_PRE_CTRL_MTN_AFTER_NR |
+		   DI_PRE_CTRL_HOLD_LINE(DI_HOLD_LINE) |
+		   (bottom_first ? DI_PRE_CTRL_FIELD_NUM : 0);
+	di_write(di, DI_PRE_CTRL, pre_ctrl);
 
 	if (stage < MESON_DI_STAGE_PRE) {
 		di_trace(di, "pre: skip trigger (stage=%u)", stage);
@@ -328,17 +449,22 @@ void meson_di_hw_pre(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *src)
 	}
 
 	/*
-	 * Kick the pre stage (frame + soft reset) first, then enable the read
-	 * MIFs to start the data flow, matching the vendor ordering.
+	 * Trigger, matching the native GXBB sequence: assert soft + frame
+	 * reset, then rewrite the config with frame reset held asserted (soft
+	 * reset released) as the go, then enable the read MIFs.
 	 */
 	di_trace(di, "pre: trigger");
 	di_update_bits(di, DI_PRE_CTRL,
-		       DI_PRE_CTRL_FRAME_RST | DI_PRE_CTRL_SOFT_RST,
-		       DI_PRE_CTRL_FRAME_RST | DI_PRE_CTRL_SOFT_RST);
+		       DI_PRE_CTRL_SOFT_RST | DI_PRE_CTRL_FRAME_RST,
+		       DI_PRE_CTRL_SOFT_RST | DI_PRE_CTRL_FRAME_RST);
+	di_write(di, DI_PRE_CTRL, pre_ctrl | DI_PRE_CTRL_FRAME_RST);
 
-	/* Enable the read MIFs. */
+	/*
+	 * Enable only the input read MIF. The memory MIF (previous field) is
+	 * only needed by motion/NR3, which are off in the NR-only path, and
+	 * enabling it on the same source canvas can stall the arbiter.
+	 */
 	di_update_bits(di, DI_INP_GEN_REG, DI_MIF_GEN_REG_EN, DI_MIF_GEN_REG_EN);
-	di_update_bits(di, DI_MEM_GEN_REG, DI_MIF_GEN_REG_EN, DI_MIF_GEN_REG_EN);
 }
 
 void meson_di_hw_post(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *dst,
@@ -425,23 +551,18 @@ void meson_di_hw_post(struct meson_di_ctx *ctx, struct vb2_v4l2_buffer *dst,
 bool meson_di_hw_pre_done(struct meson_di *di)
 {
 	u32 val = di_read(di, DI_INTR_CTRL);
-	u32 pre = val & (DI_INTR_NRWR_DONE | DI_INTR_MTNWR_DONE);
 
 	di_trace(di, "de_irq: DI_INTR_CTRL=0x%08x", val);
 
-	if (!pre)
-		return false;
-
-	/* Acknowledge whichever pre sources fired (write-1-to-clear). */
-	di_write(di, DI_INTR_CTRL, val & ~DI_INTR_DIWR_DONE);
-
 	/*
-	 * The post stage consumes the motion buffer, so the pre stage is only
-	 * complete once motion write-back (MTNWR) has finished. A lone NRWR
-	 * completion is acknowledged above and we wait for MTNWR.
+	 * The noise-reduction write-back (NRWR) completing marks the pre stage
+	 * done. Motion write-back (MTNWR) is not used in the NR-only path.
 	 */
-	if (!(pre & DI_INTR_MTNWR_DONE))
+	if (!(val & DI_INTR_NRWR_DONE))
 		return false;
+
+	/* Acknowledge the pre sources (write-1-to-clear), keep the post bit. */
+	di_write(di, DI_INTR_CTRL, val & ~DI_INTR_DIWR_DONE);
 
 	/* Disable the pre read MIFs. */
 	di_update_bits(di, DI_INP_GEN_REG, DI_MIF_GEN_REG_EN, 0);
@@ -486,4 +607,13 @@ void meson_di_hw_dump(struct meson_di *di)
 		 "di: INP_GEN=%08x MEM_GEN=%08x NRWR_CTRL=%08x MTNWR_CTRL=%08x\n",
 		 di_read(di, DI_INP_GEN_REG), di_read(di, DI_MEM_GEN_REG),
 		 di_read(di, DI_NRWR_CTRL), di_read(di, DI_MTNWR_CTRL));
+	dev_warn(di->dev,
+		 "di: INP_CANVAS=%08x INP_X=%08x INP_Y=%08x GEN2=%08x PRE_SIZE=%08x\n",
+		 di_read(di, DI_INP_CANVAS0), di_read(di, DI_INP_LUMA_X0),
+		 di_read(di, DI_INP_LUMA_Y0), di_read(di, DI_INP_GEN_REG2),
+		 di_read(di, DI_PRE_SIZE));
+	dev_warn(di->dev,
+		 "di: NR2_SW_EN=%08x NR2_FRM=%08x DNR_CTRL=%08x DNR_HV=%08x\n",
+		 di_read(di, NR2_SW_EN), di_read(di, NR2_FRM_SIZE),
+		 di_read(di, DNR_CTRL), di_read(di, DNR_HVSIZE));
 }
